@@ -17,6 +17,20 @@ type Coupon = {
   used_count: number;
 };
 
+function friendlyError(err: { code?: string; message: string }): string {
+  if (err.code === "23505") return "Já existe um cupom com esse código.";
+  if (err.code === "23514") {
+    return "Valores inválidos: confira desconto, pedido mínimo e limite de usos.";
+  }
+  if (err.code === "42501") {
+    return "Sem permissão. Entre com uma conta de administrador.";
+  }
+  if (err.code === "42P01" || err.code === "PGRST205") {
+    return "A tabela de cupons não existe no banco. Falta aplicar a migration de cupons.";
+  }
+  return err.message;
+}
+
 export default function AdminCoupons() {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +68,14 @@ export default function AdminCoupons() {
       setError("Informe o código e o valor do desconto.");
       return;
     }
+    if (!(Number(discountValue) > 0)) {
+      setError("O valor do desconto deve ser maior que zero.");
+      return;
+    }
+    if (discountType === "percent" && Number(discountValue) > 100) {
+      setError("Desconto percentual não pode passar de 100%.");
+      return;
+    }
 
     setSaving(true);
     const { error: insertError } = await supabase.from("coupons").insert({
@@ -67,7 +89,7 @@ export default function AdminCoupons() {
     setSaving(false);
 
     if (insertError) {
-      setError(insertError.message);
+      setError(friendlyError(insertError));
       return;
     }
 
@@ -80,13 +102,33 @@ export default function AdminCoupons() {
   }
 
   async function toggleActive(coupon: Coupon) {
+    const previous = coupons;
     setCoupons((prev) =>
       prev.map((c) => (c.id === coupon.id ? { ...c, active: !c.active } : c)),
     );
-    await supabase
+    const { error: updateError } = await supabase
       .from("coupons")
       .update({ active: !coupon.active })
       .eq("id", coupon.id);
+    if (updateError) {
+      setCoupons(previous);
+      setError(friendlyError(updateError));
+    }
+  }
+
+  async function deleteCoupon(coupon: Coupon) {
+    if (!confirm(`Excluir o cupom "${coupon.code}" permanentemente?`)) return;
+    setError(null);
+    const previous = coupons;
+    setCoupons((prev) => prev.filter((c) => c.id !== coupon.id));
+    const { error: deleteError } = await supabase
+      .from("coupons")
+      .delete()
+      .eq("id", coupon.id);
+    if (deleteError) {
+      setCoupons(previous);
+      setError(friendlyError(deleteError));
+    }
   }
 
   return (
@@ -169,7 +211,10 @@ export default function AdminCoupons() {
                 <th className="py-4 pr-4">Mínimo</th>
                 <th className="py-4 pr-4">Uso</th>
                 <th className="py-4 pr-4">Validade</th>
-                <th className="py-4 pr-6">Status</th>
+                <th className="py-4 pr-4">Status</th>
+                <th className="py-4 pr-6">
+                  <span className="sr-only">Ações</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -198,7 +243,7 @@ export default function AdminCoupons() {
                       ? new Date(coupon.expires_at).toLocaleDateString("pt-BR")
                       : "—"}
                   </td>
-                  <td className="py-3 pr-6">
+                  <td className="py-3 pr-4">
                     <button
                       onClick={() => toggleActive(coupon)}
                       className={`text-xs uppercase tracking-wide hover:underline ${
@@ -208,6 +253,15 @@ export default function AdminCoupons() {
                       }`}
                     >
                       {coupon.active ? "Ativo" : "Inativo"}
+                    </button>
+                  </td>
+                  <td className="py-3 pr-6 text-right">
+                    <button
+                      onClick={() => deleteCoupon(coupon)}
+                      aria-label={`Excluir cupom ${coupon.code}`}
+                      className="text-on-surface-variant hover:text-error"
+                    >
+                      Excluir
                     </button>
                   </td>
                 </tr>
